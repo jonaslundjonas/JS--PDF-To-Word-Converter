@@ -1,5 +1,0 @@
-{
-  "name": "PDF to Word Converter with OCR",
-  "description": "A web-based tool to convert both text-based and scanned PDF files into editable Word documents (.docx) using OCR technology. This tool performs a text-only conversion and does not preserve complex layouts or formatting.",
-  "requestFramePermissions": []
-}
