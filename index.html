@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF to Word (Text-Only) Converter with OCR</title>
+    <!-- 1. Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* A simple spinning loader */
+        .loader {
+            border: 4px solid #4B5563; /* Darker track */
+            border-top: 4px solid #3B82F6; /* Brighter spinner */
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+    <!-- 2. PDF.js (Mozilla) - to read and parse PDF files -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js"></script>
+
+    <!-- 3. docx (dolanmiu) - to create .docx files -->
+    <script src="https://unpkg.com/docx@7.3.0/build/index.js"></script>
+
+    <!-- 4. FileSaver.js (eligrey) - to trigger file downloads -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+    <!-- 5. Tesseract.js (OCR) - to read text from images -->
+    <!-- Using v5, the latest major version -->
+    <script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
+
+</head>
+<body class="bg-gray-900 text-gray-200 font-sans antialiased">
+    <div class="container mx-auto p-4 sm:p-8 max-w-2xl">
+        <div class="bg-gray-800 rounded-2xl shadow-xl p-6 sm:p-10">
+            
+            <header class="text-center mb-8">
+                <h1 class="text-3xl font-bold text-white">PDF to Word Converter <span class="text-blue-400 text-2xl">with OCR</span></h1>
+                <p class="text-gray-400 mt-2">Convert text-based & scanned PDFs to editable Word documents (.docx)</p>
+            </header>
+
+            <!-- Disclaimer Box -->
+            <div class="bg-blue-900 bg-opacity-50 border-l-4 border-blue-500 text-blue-200 p-4 rounded-lg mb-6" role="alert">
+                <p class="font-bold">Important Limitation</p>
+                <p>This tool performs a text-only conversion. It will **attempt to use OCR** on scanned pages, but will **not** preserve complex formatting, layout, columns, or tables.</p>
+            </div>
+
+            <!-- File Upload Section -->
+            <div class="space-y-6">
+                <div>
+                    <label for="file-upload" class="block text-sm font-medium text-gray-300 mb-2">
+                        1. Choose a PDF file
+                    </label>
+                    <input id="file-upload" name="file-upload" type="file" accept=".pdf"
+                           class="block w-full text-sm text-gray-400 border border-gray-600 rounded-lg cursor-pointer
+                                  file:mr-4 file:py-2 file:px-4
+                                  file:rounded-full file:border-0
+                                  file:text-sm file:font-semibold
+                                  file:bg-blue-500 file:text-white
+                                  hover:file:bg-blue-600
+                                  "/>
+                </div>
+
+                <!-- Convert Button -->
+                <button id="convert-btn" 
+                        class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-full
+                               transition duration-300 ease-in-out
+                               focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50
+                               disabled:bg-gray-400 disabled:cursor-not-allowed">
+                    2. Convert to .docx
+                </button>
+            </div>
+
+            <!-- Status/Loading Section -->
+            <div id="status-area" class="text-center mt-8" style="display: none;">
+                <div class="loader mx-auto"></div>
+                <p id="status-message" class="text-gray-400 font-medium mt-4">Working on it...</p>
+            </div>
+
+        </div>
+
+        <!-- Added Footer -->
+        <footer class="text-center mt-6">
+            <p class="text-sm text-gray-500">Built with Vanilla JS, Tesseract.js, and PDF.js.</p>
+        </footer>
+    </div>
+
+    <script>
+        // --- 1. Set up PDF.js worker ---
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+        // --- 2. Get DOM Elements ---
+        const fileInput = document.getElementById('file-upload');
+        const convertBtn = document.getElementById('convert-btn');
+        const statusArea = document.getElementById('status-area');
+        const statusMessage = document.getElementById('status-message');
+
+        /**
+         * Renders a PDF page to a canvas and runs Tesseract OCR on it.
+         * @param {pdfjsLib.PDFPageProxy} page - The PDF.js page object.
+         * @param {Tesseract.Worker} worker - The Tesseract worker instance.
+         * @returns {Promise<string>} - The extracted text.
+         */
+        async function runOCR(page, worker) {
+            // Use a higher scale for better OCR accuracy
+            const viewport = page.getViewport({ scale: 2.0 }); 
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+
+            const renderContext = {
+                canvasContext: context,
+                viewport: viewport
+            };
+            
+            await page.render(renderContext).promise;
+            
+            // Recognize text from the canvas
+            const { data: { text } } = await worker.recognize(canvas);
+            return text;
+        }
+
+        // --- 3. Add Click Event Listener ---
+        convertBtn.addEventListener('click', async () => {
+            const file = fileInput.files[0];
+            if (!file || file.type !== 'application/pdf') {
+                alert('Please select a valid PDF file.'); 
+                return;
+            }
+
+            // --- 4. Disable UI and Show Loading ---
+            convertBtn.disabled = true;
+            statusArea.style.display = 'block';
+
+            let worker; // Tesseract worker
+            try {
+                // --- 5. Initialize Tesseract Worker ---
+                statusMessage.textContent = 'Initializing OCR engine...';
+                worker = await Tesseract.createWorker('eng', 1, {
+                    logger: m => {
+                        if (m.status === 'loading language data' || m.status === 'recognizing text') {
+                           const progress = Math.round(m.progress * 100);
+                           statusMessage.textContent = `Processing OCR (${progress}%)...`;
+                        }
+                        console.log(m); // Log progress
+                    }
+                });
+
+                // --- 6. Read the file ---
+                statusMessage.textContent = 'Reading PDF file...';
+                const reader = new FileReader();
+
+                // --- 7. File Reader Handlers ---
+                reader.onload = async (e) => {
+                    try {
+                        const arrayBuffer = e.target.result;
+                        
+                        // --- 8. Load PDF with PDF.js ---
+                        statusMessage.textContent = 'Parsing PDF structure...';
+                        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+                        const pdf = await loadingTask.promise;
+
+                        // --- 9. Extract Text from All Pages (with OCR fallback) ---
+                        const numPages = pdf.numPages;
+                        let allText = '';
+                        
+                        for (let i = 1; i <= numPages; i++) {
+                            const page = await pdf.getPage(i);
+                            const textContent = await page.getTextContent();
+                            let pageText = '';
+
+                            if (textContent.items.length > 0) {
+                                // --- 9a. Standard Text Extraction ---
+                                statusMessage.textContent = `Page ${i}/${numPages}: Extracting text...`;
+                                pageText = textContent.items.map(item => item.str).join(' ');
+                            } else {
+                                // --- 9b. OCR Fallback ---
+                                statusMessage.textContent = `Page ${i}/${numPages}: Running OCR (this may take a moment)...`;
+                                pageText = await runOCR(page, worker);
+                            }
+                            allText += pageText + '\n\n'; // Add space between pages
+                        }
+                        
+                        // --- 10. Create .docx File with docx.js ---
+                        statusMessage.textContent = 'Building .docx file...';
+
+                        // Regex to detect common bullet point markers at the start of a line.
+                        const bulletRegex = /^\s*([•*-]|\d+\.)\s+/; 
+
+                        const paragraphs = allText.split('\n').map(line => {
+                            const trimmedLine = line.trim();
+                            
+                            if (bulletRegex.test(trimmedLine)) {
+                                const text = trimmedLine.replace(bulletRegex, '');
+                                return new docx.Paragraph({
+                                    children: [ new docx.TextRun(text) ],
+                                    bullet: { level: 0 }
+                                });
+                            } else if (trimmedLine.length > 0) {
+                                return new docx.Paragraph({
+                                    children: [ new docx.TextRun(trimmedLine) ],
+                                });
+                            }
+                            return null; 
+                        }).filter(p => p !== null); // Remove empty lines
+
+
+                        const doc = new docx.Document({
+                            sections: [{
+                                children: paragraphs.length > 0 ? paragraphs : [new docx.Paragraph({text: ""})],
+                            }]
+                        });
+
+                        // --- 11. Generate and Save the File ---
+                        statusMessage.textContent = 'Generating download...';
+                        const blob = await docx.Packer.toBlob(doc);
+                        const originalFileName = file.name.replace(/\.pdf$/i, '');
+                        saveAs(blob, `${originalFileName}_converted.docx`);
+
+                        // --- 12. Reset UI (Success) ---
+                        statusMessage.textContent = 'Conversion complete!';
+
+                    } catch (error) {
+                        // --- 13. Handle PDF Processing Error ---
+                        console.error('PDF Processing Error:', error);
+                        alert(`An error occurred during PDF processing: ${error.message}`);
+                        statusMessage.textContent = 'Error during conversion.';
+                    } finally {
+                        // --- 14. Clean up worker and UI ---
+                        if (worker) {
+                            statusMessage.textContent = 'Cleaning up resources...';
+                            await worker.terminate();
+                            console.log('Tesseract worker terminated.');
+                        }
+                        // Hide status and re-enable button after a delay
+                        setTimeout(() => {
+                            statusArea.style.display = 'none';
+                            convertBtn.disabled = false;
+                            fileInput.value = '';
+                        }, 2000);
+                    }
+                };
+
+                reader.onerror = (error) => {
+                    console.error('FileReader Error:', error);
+                    alert('Failed to read the file.');
+                    statusArea.style.display = 'none';
+                    convertBtn.disabled = false;
+                    if (worker) worker.terminate();
+                };
+                
+                reader.readAsArrayBuffer(file);
+
+            } catch (error) {
+                // --- 15. Handle Tesseract Init Error (Outer try/catch) ---
+                console.error('OCR Initialization Error:', error);
+                alert(`Failed to initialize OCR engine: ${error.message}`);
+                statusArea.style.display = 'none';
+                convertBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
